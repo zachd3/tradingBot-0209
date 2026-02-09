@@ -5,7 +5,9 @@ from typing import Any, Literal
 
 from rich.console import Console
 
+from bot.models import Instrument, Position
 from bot.okx_client import OKXClient
+from bot.sizing import compute_contract_size
 
 console = Console()
 PosSide = Literal["long", "short"]
@@ -33,28 +35,69 @@ class HedgeCycleStrategy:
         except Exception as e:
             console.print(f"[yellow]pos mode set skipped/failed:[/] {e}")
 
-    async def _fetch_upnl(self) -> dict[PosSide, float]:
+    async def _fetch_positions(self) -> dict[PosSide, Position | None]:
         inst = self._bot()["instrument_id"]
         data = await self.client.positions(inst)
-        ups: dict[PosSide, float] = {"long": 0.0, "short": 0.0}
+        out: dict[PosSide, Position | None] = {"long": None, "short": None}
         for p in data.get("data", []):
             side = p.get("posSide")
             if side in ("long", "short"):
-                ups[side] = _to_float(p.get("upl"), 0.0)  # upl: unrealized PnL
-        return ups
+                out[side] = Position.model_validate(p)
+        return out
+
+    async def _fetch_instrument(self) -> Instrument:
+        inst = self._bot()["instrument_id"]
+        data = await self.client.instruments("SWAP", inst)
+        items = data.get("data", [])
+        if not items:
+            raise RuntimeError(f"Instrument not found: {inst}")
+        return Instrument.model_validate(items[0])
+
+    async def _fetch_last_px(self) -> float:
+        inst = self._bot()["instrument_id"]
+        data = await self.client.tickers("SWAP", inst)
+        items = data.get("data", [])
+        if not items:
+            raise RuntimeError(f"Ticker not found: {inst}")
+        return _to_float(items[0].get("last"), 0.0)
+
+    def _is_open(self, p: Position | None) -> bool:
+        if p is None:
+            return False
+        return _to_float(p.pos, 0.0) > 0
+
+    async def _open_side_market(self, side: PosSide, sz: str) -> None:
+        inst = self._bot()["instrument_id"]
+        td_mode = self._bot().get("td_mode", "isolated")
+        console.print(f"Opening {side} market sz={sz} on {inst} ({td_mode})")
+
+        # For SWAP in long/short mode: side is buy/sell, posSide is long/short
+        order_side = "buy" if side == "long" else "sell"
+        await self.client.place_order(
+            instId=inst,
+            tdMode=td_mode,
+            side=order_side,
+            ordType="market",
+            sz=sz,
+            posSide=side,
+        )
 
     async def _open_both_sides_if_needed(self) -> None:
-        # Placeholder: open market orders sized by notional.
-        # We’ll refine after Zach confirms sizing rules + contract specs.
         inst = self._bot()["instrument_id"]
-        td_mode = self._bot().get("td_mode", "cross")
         notional = float(self._bot().get("notional_usdt", 20))
 
-        # TODO: OKX requires sz in contract units, not notional. We need to query instrument details
-        # and compute size. For now, we do nothing until sizing is implemented.
+        instrument = await self._fetch_instrument()
+        last_px = await self._fetch_last_px()
+        sr = compute_contract_size(instrument=instrument, last_px=last_px, target_notional=notional)
         console.print(
-            f"[yellow]TODO:[/] Implement sizing + open both sides (inst={inst}, tdMode={td_mode}, notional~{notional} USDT)"
+            f"Sizing: target_notional={notional} last={last_px} ctVal={instrument.ctVal} -> sz={sr.sz} (~{sr.approx_notional:.2f} USDT)"
         )
+
+        pos = await self._fetch_positions()
+        if not self._is_open(pos["long"]):
+            await self._open_side_market("long", sr.sz)
+        if not self._is_open(pos["short"]):
+            await self._open_side_market("short", sr.sz)
 
     async def _close_side(self, side: PosSide) -> None:
         inst = self._bot()["instrument_id"]
@@ -69,14 +112,31 @@ class HedgeCycleStrategy:
 
         await self._ensure_long_short_mode()
 
-        upnl = await self._fetch_upnl()
+        pos = await self._fetch_positions()
+        upnl = {
+            "long": _to_float(pos["long"].upl if pos["long"] else 0.0, 0.0),
+            "short": _to_float(pos["short"].upl if pos["short"] else 0.0, 0.0),
+        }
         tp = float(self._bot().get("take_profit_usdt", 0.3))
         recovery = float(self._bot().get("recovery_usdt", -0.05))
 
-        console.print(f"uPnL long={upnl['long']:.4f} short={upnl['short']:.4f}")
+        console.print(
+            f"uPnL long={upnl['long']:.4f} short={upnl['short']:.4f} | open long={self._is_open(pos['long'])} short={self._is_open(pos['short'])}"
+        )
 
-        # First run: if no positions, open both.
-        if abs(upnl["long"]) < 1e-9 and abs(upnl["short"]) < 1e-9:
+        # Ensure both sides are open (initial / after re-open).
+        if not self._is_open(pos["long"]) or not self._is_open(pos["short"]):
+            # Recovery gating: only re-open the missing side when the remaining side recovered.
+            if not self._is_open(pos["long"]) and self._is_open(pos["short"]):
+                if upnl["short"] >= recovery:
+                    await self._open_both_sides_if_needed()
+                return
+            if not self._is_open(pos["short"]) and self._is_open(pos["long"]):
+                if upnl["long"] >= recovery:
+                    await self._open_both_sides_if_needed()
+                return
+
+            # If both are closed/flat, open both.
             await self._open_both_sides_if_needed()
             return
 
@@ -86,14 +146,4 @@ class HedgeCycleStrategy:
             return
         if upnl["short"] >= tp:
             await self._close_side("short")
-            return
-
-        # Recovery rule placeholder:
-        # If one side is flat (0) and the other recovered to >= threshold, re-open the missing side.
-        # We'll implement after we track actual position sizes and whether a side is open.
-        if abs(upnl["long"]) < 1e-9 and upnl["short"] >= recovery:
-            console.print("[yellow]TODO:[/] Re-open long side (recovery reached)")
-            return
-        if abs(upnl["short"]) < 1e-9 and upnl["long"] >= recovery:
-            console.print("[yellow]TODO:[/] Re-open short side (recovery reached)")
             return

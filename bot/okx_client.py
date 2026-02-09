@@ -70,6 +70,18 @@ class OKXClient:
     async def positions(self, inst_id: str) -> dict[str, Any]:
         return await self.request("GET", "/api/v5/account/positions", params={"instId": inst_id})
 
+    async def instruments(self, inst_type: str, inst_id: str | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"instType": inst_type}
+        if inst_id:
+            params["instId"] = inst_id
+        return await self.request("GET", "/api/v5/public/instruments", params=params)
+
+    async def tickers(self, inst_type: str, inst_id: str | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"instType": inst_type}
+        if inst_id:
+            params["instId"] = inst_id
+        return await self.request("GET", "/api/v5/market/tickers", params=params)
+
     async def place_order(self, **payload: Any) -> dict[str, Any]:
         return await self.request("POST", "/api/v5/trade/order", json_body=payload)
 
