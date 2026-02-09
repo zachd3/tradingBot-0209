@@ -11,6 +11,25 @@ from rich.console import Console
 from bot.okx_client import OKXClient
 from bot.strategy import HedgeCycleStrategy
 
+
+def load_simple_dotenv(path: Path) -> dict[str, str]:
+    """Minimal .env loader (KEY=VALUE per line). Does not override existing env."""
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        v = v.strip().strip('"').strip("'")
+        if k and k not in os.environ:
+            out[k] = v
+    return out
+
 console = Console()
 
 
@@ -20,6 +39,11 @@ def load_config(path: Path) -> dict:
 
 async def run(config_path: Path) -> None:
     cfg = load_config(config_path)
+
+    # Load env vars from local .env and OpenClaw global .env if present.
+    # This keeps secrets out of git while making runs predictable.
+    for p in (Path.cwd() / ".env", Path.home() / ".openclaw" / ".env"):
+        os.environ.update(load_simple_dotenv(p))
 
     api_key = cfg["okx"].get("api_key") or os.getenv("OKX_API_KEY") or ""
     api_secret = cfg["okx"].get("api_secret") or os.getenv("OKX_API_SECRET") or ""
