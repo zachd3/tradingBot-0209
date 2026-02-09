@@ -7,6 +7,7 @@ import json
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 import httpx
 
@@ -44,11 +45,25 @@ class OKXClient:
             h["x-simulated-trading"] = "1"
         return h
 
-    async def request(self, method: str, path: str, params: Optional[dict[str, Any]] = None, json_body: Any = None) -> dict[str, Any]:
+    async def request(
+        self,
+        method: str,
+        path: str,
+        params: Optional[dict[str, Any]] = None,
+        json_body: Any = None,
+    ) -> dict[str, Any]:
         url = self.base_url + path
         body_str = "" if json_body is None else json.dumps(json_body, separators=(",", ":"))
+
+        # OKX signature must include the exact request path, including query string.
+        request_path = path
+        if params:
+            # Use stable ordering
+            query = urlencode(sorted(((k, str(v)) for k, v in params.items())), doseq=True)
+            request_path = f"{path}?{query}"
+
         ts = self._timestamp()
-        headers = self._headers(ts, method, path + ("" if not params else ""), body_str)
+        headers = self._headers(ts, method, request_path, body_str)
 
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.request(method, url, params=params, content=body_str if body_str else None, headers=headers)
