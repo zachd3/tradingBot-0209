@@ -73,7 +73,7 @@ class HedgeCycleStrategy:
 
         # For SWAP in long/short mode: side is buy/sell, posSide is long/short
         order_side = "buy" if side == "long" else "sell"
-        await self.client.place_order(
+        payload = dict(
             instId=inst,
             tdMode=td_mode,
             side=order_side,
@@ -81,6 +81,10 @@ class HedgeCycleStrategy:
             sz=sz,
             posSide=side,
         )
+        if bool(self._bot().get("dry_run", True)):
+            console.print(f"[yellow]DRY RUN order payload:[/] {payload}")
+            return
+        await self.client.place_order(**payload)
 
     async def _open_both_sides_if_needed(self) -> None:
         inst = self._bot()["instrument_id"]
@@ -103,12 +107,21 @@ class HedgeCycleStrategy:
         inst = self._bot()["instrument_id"]
         td_mode = self._bot().get("td_mode", "cross")
         console.print(f"Closing {side} position on {inst} ({td_mode})")
+        if bool(self._bot().get("dry_run", True)):
+            console.print(f"[yellow]DRY RUN close-position:[/] instId={inst} posSide={side} mgnMode={td_mode}")
+            return
         await self.client.close_position(inst_id=inst, mgn_mode=td_mode, pos_side=side)
 
     async def tick(self) -> None:
         if self.cfg.get("risk", {}).get("kill_switch"):
             console.print("[red]KILL SWITCH enabled — not trading.[/]")
             return
+
+        if not self.client.simulated:
+            raise RuntimeError("Refusing to run with simulated=false. Set okx.simulated=true for demo.")
+
+        if bool(self._bot().get("dry_run", True)):
+            console.print("[yellow]DRY RUN enabled — will not place orders.[/]")
 
         await self._ensure_long_short_mode()
 

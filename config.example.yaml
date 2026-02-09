@@ -1,4 +1,7 @@
 okx:
+  # Prefer environment variables (recommended):
+  #   OKX_API_KEY, OKX_API_SECRET, OKX_PASSPHRASE
+  # If set here, do NOT commit config.yaml.
   api_key: ""
   api_secret: ""
   passphrase: ""
@@ -18,6 +21,7 @@ bot:
   recovery_usdt: -0.05             # after closing winner, re-open it when remaining side recovers to >= this
 
   poll_seconds: 10
+  dry_run: true
 
 risk:
   max_daily_loss_usdt: 5

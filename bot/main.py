@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from pathlib import Path
+import os
 
 import yaml
 from rich.console import Console
@@ -20,12 +21,21 @@ def load_config(path: Path) -> dict:
 async def run(config_path: Path) -> None:
     cfg = load_config(config_path)
 
+    api_key = cfg["okx"].get("api_key") or os.getenv("OKX_API_KEY") or ""
+    api_secret = cfg["okx"].get("api_secret") or os.getenv("OKX_API_SECRET") or ""
+    passphrase = cfg["okx"].get("passphrase") or os.getenv("OKX_PASSPHRASE") or ""
+
     client = OKXClient(
-        api_key=cfg["okx"]["api_key"],
-        api_secret=cfg["okx"]["api_secret"],
-        passphrase=cfg["okx"]["passphrase"],
+        api_key=api_key,
+        api_secret=api_secret,
+        passphrase=passphrase,
         simulated=bool(cfg["okx"].get("simulated", True)),
     )
+
+    if not client.api_key or not client.api_secret or not client.passphrase:
+        raise SystemExit(
+            "Missing OKX credentials. Set OKX_API_KEY/OKX_API_SECRET/OKX_PASSPHRASE env vars or fill config.yaml (not committed)."
+        )
 
     strat = HedgeCycleStrategy(client=client, cfg=cfg)
 
