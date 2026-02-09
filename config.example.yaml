@@ -6,8 +6,8 @@ okx:
   simulated: true
 
 bot:
-  instrument_id: "BTC-USDT-SWAP"   # TODO: choose
-  td_mode: "cross"                # cross|isolated
+  instrument_id: "SOL-USDT-SWAP"
+  td_mode: "isolated"             # cross|isolated
   leverage: 1
 
   # Order sizing (start small)
