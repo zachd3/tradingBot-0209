@@ -33,6 +33,7 @@ class HedgeCycleStrategy:
 
     _contract_sz: str | None = None
     _leverage_ready: bool = False
+    _preflight_done: bool = False
     _state: dict[str, Any] = field(default_factory=dict)
     _notifier: TelegramNotifier | None = None
 
@@ -128,6 +129,37 @@ class HedgeCycleStrategy:
             await self._notify(f"Leverage set to {lever}x ({td_mode})")
         except Exception as e:
             console.print(f"[yellow]set leverage skipped/failed:[/] {e}")
+
+    async def _preflight_check(self) -> None:
+        if self._preflight_done:
+            return
+
+        inst = self._bot()["instrument_id"]
+        cfg = await self.client.account_config()
+        row = (cfg.get("data") or [{}])[0]
+        acct_lv = str(row.get("acctLv", ""))
+        pos_mode = str(row.get("posMode", ""))
+        perm = str(row.get("perm", ""))
+
+        if "trade" not in perm:
+            raise RuntimeError("API key missing trade permission (perm does not include 'trade').")
+
+        # acctLv=1 is Simple mode; perpetual futures orders are rejected with 51010.
+        if acct_lv == "1":
+            raise RuntimeError(
+                "OKX account is in Simple mode (acctLv=1). Please switch to Single-currency or Multi-currency margin mode in OKX app/web."
+            )
+
+        if pos_mode != "long_short_mode":
+            await self.client.set_position_mode("long_short_mode")
+
+        # quick instrument sanity check
+        ins = await self.client.instruments("SWAP", inst_id=inst)
+        if not ins.get("data"):
+            raise RuntimeError(f"Instrument not available for trading: {inst}")
+
+        self._preflight_done = True
+        await self._notify(f"Preflight OK | acctLv={acct_lv} posMode=long_short_mode")
 
     async def _fetch_positions(self) -> dict[PosSide, dict[str, float | bool]]:
         inst = self._bot()["instrument_id"]
@@ -284,6 +316,7 @@ class HedgeCycleStrategy:
             return
 
         await self._ensure_long_short_mode()
+        await self._preflight_check()
         await self._ensure_leverage()
 
         pos = await self._fetch_positions()
