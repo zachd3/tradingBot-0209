@@ -8,20 +8,25 @@ okx:
 bot:
   instrument_id: "SOL-USDT-SWAP"
   td_mode: "isolated"             # cross|isolated
-  leverage: 1
+  leverage: 10
 
-  # Order sizing (start small)
-  notional_usdt: 20
+  # Per-side target notional in USDT (long and short each)
+  notional_usdt: 25
+
+  # Fees and execution cushion
+  taker_fee_rate: 0.0005            # 0.05% taker fee (adjust if your VIP tier differs)
+  fee_buffer_mult: 2.2              # include extra room for churn/slippage
+  min_edge_usdt: 0.15               # minimal edge before taking profit
 
   # Cycle logic
-  take_profit_usdt: 0.30           # close winning side when unrealized PnL >= this
-  recovery_usdt: -0.05             # after closing winner, re-open it when remaining side recovers to >= this
+  take_profit_usdt: 0.60            # strategy uses max(configured, fee-based floor)
+  recovery_usdt: 0.10               # re-open missing side when remaining side uPnL >= this
 
   poll_seconds: 10
 
 risk:
-  max_daily_loss_usdt: 5
-  max_position_notional_usdt: 50
+  max_daily_loss_usdt: 8
+  max_position_notional_usdt: 80
   kill_switch: false
 
 logging:

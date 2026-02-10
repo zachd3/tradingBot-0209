@@ -7,6 +7,7 @@ import json
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 import httpx
 
@@ -45,13 +46,18 @@ class OKXClient:
         return h
 
     async def request(self, method: str, path: str, params: Optional[dict[str, Any]] = None, json_body: Any = None) -> dict[str, Any]:
-        url = self.base_url + path
+        query = ""
+        if params:
+            query = "?" + urlencode({k: v for k, v in params.items() if v is not None})
+
+        path_with_query = path + query
+        url = self.base_url + path_with_query
         body_str = "" if json_body is None else json.dumps(json_body, separators=(",", ":"))
         ts = self._timestamp()
-        headers = self._headers(ts, method, path + ("" if not params else ""), body_str)
+        headers = self._headers(ts, method, path_with_query, body_str)
 
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.request(method, url, params=params, content=body_str if body_str else None, headers=headers)
+            resp = await client.request(method, url, content=body_str if body_str else None, headers=headers)
 
         data = resp.json()
         if resp.status_code >= 400 or data.get("code") not in ("0", 0, None):
@@ -60,6 +66,20 @@ class OKXClient:
 
     # ---- Convenience wrappers ----
 
+    async def public_request(self, method: str, path: str, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        query = ""
+        if params:
+            query = "?" + urlencode({k: v for k, v in params.items() if v is not None})
+        url = self.base_url + path + query
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.request(method, url)
+
+        data = resp.json()
+        if resp.status_code >= 400 or data.get("code") not in ("0", 0, None):
+            raise RuntimeError(f"OKX public error: status={resp.status_code} body={data}")
+        return data
+
     async def account_config(self) -> dict[str, Any]:
         return await self.request("GET", "/api/v5/account/config")
 
@@ -67,8 +87,20 @@ class OKXClient:
         # pos_mode: "long_short_mode" or "net_mode"
         return await self.request("POST", "/api/v5/account/set-position-mode", json_body={"posMode": pos_mode})
 
+    async def set_leverage(self, inst_id: str, lever: float, mgn_mode: str, pos_side: Optional[str] = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"instId": inst_id, "lever": str(lever), "mgnMode": mgn_mode}
+        if pos_side:
+            payload["posSide"] = pos_side
+        return await self.request("POST", "/api/v5/account/set-leverage", json_body=payload)
+
     async def positions(self, inst_id: str) -> dict[str, Any]:
         return await self.request("GET", "/api/v5/account/positions", params={"instId": inst_id})
+
+    async def instruments(self, inst_type: str, inst_id: Optional[str] = None) -> dict[str, Any]:
+        return await self.public_request("GET", "/api/v5/public/instruments", params={"instType": inst_type, "instId": inst_id})
+
+    async def ticker(self, inst_id: str) -> dict[str, Any]:
+        return await self.public_request("GET", "/api/v5/market/ticker", params={"instId": inst_id})
 
     async def place_order(self, **payload: Any) -> dict[str, Any]:
         return await self.request("POST", "/api/v5/trade/order", json_body=payload)

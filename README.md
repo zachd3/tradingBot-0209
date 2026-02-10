@@ -13,7 +13,7 @@ WIP scaffold.
 
 ## Setup (local)
 ```bash
-cd okx-hedge-bot
+cd tradingBot-0209
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -28,5 +28,6 @@ python -m bot.main --config config.yaml
 
 ## Safety notes
 - Start with demo trading only.
-- Use small notional and leverage=1 until validated.
+- Current default is leverage=10 with conservative per-side notional; tune only after validating fills and fee behavior.
+- `take_profit_usdt` is fee-aware (bot applies a fee floor using `taker_fee_rate`, `fee_buffer_mult`, and `min_edge_usdt`).
 - Add API keys in `config.yaml` (do not commit).
