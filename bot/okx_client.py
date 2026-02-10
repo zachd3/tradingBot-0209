@@ -82,6 +82,10 @@ class OKXClient:
         # pos_mode: "long_short_mode" or "net_mode"
         return await self.request("POST", "/api/v5/account/set-position-mode", json_body={"posMode": pos_mode})
 
+    async def set_account_level(self, acct_lv: str) -> dict[str, Any]:
+        # acct_lv: "1" | "2" | "3" | "4"
+        return await self.request("POST", "/api/v5/account/set-account-level", json_body={"acctLv": acct_lv})
+
     async def positions(self, inst_id: str) -> dict[str, Any]:
         return await self.request("GET", "/api/v5/account/positions", params={"instId": inst_id})
 
