@@ -7,27 +7,42 @@ okx:
 
 bot:
   instrument_id: "SOL-USDT-SWAP"
-  td_mode: "isolated"             # cross|isolated
+  td_mode: "isolated"               # cross|isolated
   leverage: 10
 
   # Per-side target notional in USDT (long and short each)
   notional_usdt: 25
 
   # Fees and execution cushion
-  taker_fee_rate: 0.0005            # 0.05% taker fee (adjust if your VIP tier differs)
-  fee_buffer_mult: 2.2              # include extra room for churn/slippage
-  min_edge_usdt: 0.15               # minimal edge before taking profit
+  taker_fee_rate: 0.0005              # 0.05% taker fee (adjust if your VIP tier differs)
+  fee_buffer_mult: 2.2                # include extra room for churn/slippage
+  min_edge_usdt: 0.15                 # minimal edge before taking profit
 
   # Cycle logic
-  take_profit_usdt: 0.60            # strategy uses max(configured, fee-based floor)
-  recovery_usdt: 0.10               # re-open missing side when remaining side uPnL >= this
+  take_profit_usdt: 0.60              # strategy uses max(configured, fee-based floor)
+  recovery_usdt: 0.10                 # re-open missing side when remaining side uPnL >= this
 
+  # Market quality filters (for opens/re-opens)
+  max_spread_bps: 10                  # block entries if spread wider than this
+  vol_bar: "1m"
+  vol_lookback: 30
+  max_vol_bps: 35                     # stdev(log-returns) in bps
+
+  # Runtime behavior
   poll_seconds: 10
+  min_action_interval_seconds: 3
+  state_file: "state/hedge_state.json"
 
 risk:
   max_daily_loss_usdt: 8
   max_position_notional_usdt: 80
   kill_switch: false
+
+telegram:
+  enabled: false
+  bot_token: ""
+  chat_id: ""
+  alert_prefix: "[hedge-bot]"
 
 logging:
   level: "INFO"

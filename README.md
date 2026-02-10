@@ -26,8 +26,20 @@ source .venv/bin/activate
 python -m bot.main --config config.yaml
 ```
 
+## Telegram alerts (optional)
+In `config.yaml`:
+```yaml
+telegram:
+  enabled: true
+  bot_token: "<YOUR_BOT_TOKEN>"
+  chat_id: "<YOUR_CHAT_ID>"
+```
+
 ## Safety notes
 - Start with demo trading only.
 - Current default is leverage=10 with conservative per-side notional; tune only after validating fills and fee behavior.
 - `take_profit_usdt` is fee-aware (bot applies a fee floor using `taker_fee_rate`, `fee_buffer_mult`, and `min_edge_usdt`).
+- Entry/re-entry is blocked automatically when spread/volatility exceeds configured limits.
+- Bot persists cycle state in `state/hedge_state.json` for restart-safe behavior.
+- Optional Telegram alerts can be enabled in `config.yaml`.
 - Add API keys in `config.yaml` (do not commit).

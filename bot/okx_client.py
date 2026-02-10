@@ -102,6 +102,13 @@ class OKXClient:
     async def ticker(self, inst_id: str) -> dict[str, Any]:
         return await self.public_request("GET", "/api/v5/market/ticker", params={"instId": inst_id})
 
+    async def candles(self, inst_id: str, bar: str = "1m", limit: int = 30) -> dict[str, Any]:
+        return await self.public_request(
+            "GET",
+            "/api/v5/market/candles",
+            params={"instId": inst_id, "bar": bar, "limit": limit},
+        )
+
     async def place_order(self, **payload: Any) -> dict[str, Any]:
         return await self.request("POST", "/api/v5/trade/order", json_body=payload)
 
