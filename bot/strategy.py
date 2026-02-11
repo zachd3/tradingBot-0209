@@ -32,6 +32,7 @@ class HedgeCycleStrategy:
     cfg: dict[str, Any]
 
     _contract_sz: str | None = None
+    _pos_mode_ready: bool = False
     _leverage_ready: bool = False
     _preflight_done: bool = False
     _state: dict[str, Any] = field(default_factory=dict)
@@ -108,8 +109,11 @@ class HedgeCycleStrategy:
         self._save_state()
 
     async def _ensure_long_short_mode(self) -> None:
+        if self._pos_mode_ready:
+            return
         try:
             await self.client.set_position_mode("long_short_mode")
+            self._pos_mode_ready = True
         except Exception as e:
             console.print(f"[yellow]pos mode set skipped/failed:[/] {e}")
 
@@ -152,6 +156,7 @@ class HedgeCycleStrategy:
 
         if pos_mode != "long_short_mode":
             await self.client.set_position_mode("long_short_mode")
+        self._pos_mode_ready = True
 
         # quick instrument sanity check
         ins = await self.client.instruments("SWAP", inst_id=inst)
