@@ -320,7 +320,6 @@ class HedgeCycleStrategy:
             await self._notify("Daily realized loss limit reached. Trading halted for today.")
             return
 
-        await self._ensure_long_short_mode()
         await self._preflight_check()
         await self._ensure_leverage()
 
