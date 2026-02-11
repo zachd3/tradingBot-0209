@@ -35,6 +35,12 @@ telegram:
   chat_id: "<YOUR_CHAT_ID>"
 ```
 
+## Quick status dashboard
+```bash
+source .venv/bin/activate
+python -m bot.status --config config.yaml
+```
+
 ## Safety notes
 - Start with demo trading only.
 - Current default is leverage=10 with conservative per-side notional; tune only after validating fills and fee behavior.
