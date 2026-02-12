@@ -30,7 +30,9 @@ bot:
 
   # Runtime behavior
   poll_seconds: 10
+  error_retry_seconds: 8
   min_action_interval_seconds: 3
+  status_push_seconds: 600            # periodic Telegram heartbeat status
   state_file: "state/hedge_state.json"
 
 risk:

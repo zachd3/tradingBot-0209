@@ -91,6 +91,29 @@ class HedgeCycleStrategy:
             except Exception as e:
                 console.print(f"[yellow]telegram alert failed:[/] {e}")
 
+    async def _maybe_status_push(self, long_open: bool, short_open: bool, long_upl: float, short_upl: float) -> None:
+        interval = int(self._bot().get("status_push_seconds", 600))
+        if interval <= 0:
+            return
+        now = time.time()
+        last = float(self._state.get("last_status_push_ts", 0.0))
+        if now - last < interval:
+            return
+        self._state["last_status_push_ts"] = now
+        self._save_state()
+        await self._notify(
+            f"Status | long(open={long_open}, upl={long_upl:.4f}) short(open={short_open}, upl={short_upl:.4f}) "
+            f"cycle={self._state.get('cycle_id',0)} today={self._state.get('today_realized_usdt',0.0):.4f}"
+        )
+
+    async def _decision_log_once(self, reason: str) -> None:
+        prev = str(self._state.get("last_decision_reason", ""))
+        if reason == prev:
+            return
+        self._state["last_decision_reason"] = reason
+        self._save_state()
+        await self._notify(f"Decision: hold ({reason})")
+
     def _roll_day_if_needed(self) -> None:
         today = self._today()
         if self._state.get("today") != today:
@@ -335,6 +358,7 @@ class HedgeCycleStrategy:
         console.print(
             f"state long(open={long_open}, upl={long_upl:.4f}) short(open={short_open}, upl={short_upl:.4f}) | tp={tp:.4f} recovery={recovery:.4f}"
         )
+        await self._maybe_status_push(long_open, short_open, long_upl, short_upl)
 
         if not self._can_act_now():
             return
@@ -344,6 +368,7 @@ class HedgeCycleStrategy:
             ok, reason = await self._market_filter_ok()
             if not ok:
                 console.print(f"[yellow]entry blocked:[/] {reason}")
+                await self._decision_log_once(f"entry blocked: {reason}")
                 return
             await self._open_side("long")
             await self._open_side("short")
@@ -358,6 +383,7 @@ class HedgeCycleStrategy:
             ok, reason = await self._market_filter_ok()
             if not ok:
                 console.print(f"[yellow]re-entry blocked:[/] {reason}")
+                await self._decision_log_once(f"re-entry blocked: {reason}")
                 return
             await self._open_side("long")
             self._state["missing_side"] = ""
@@ -370,6 +396,7 @@ class HedgeCycleStrategy:
             ok, reason = await self._market_filter_ok()
             if not ok:
                 console.print(f"[yellow]re-entry blocked:[/] {reason}")
+                await self._decision_log_once(f"re-entry blocked: {reason}")
                 return
             await self._open_side("short")
             self._state["missing_side"] = ""
@@ -386,3 +413,5 @@ class HedgeCycleStrategy:
         if short_open and short_upl >= tp:
             await self._close_side("short", est_upl=short_upl)
             return
+
+        await self._decision_log_once("waiting for recovery/TP")

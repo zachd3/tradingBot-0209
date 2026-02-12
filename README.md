@@ -48,4 +48,6 @@ python -m bot.status --config config.yaml
 - Entry/re-entry is blocked automatically when spread/volatility exceeds configured limits.
 - Bot persists cycle state in `state/hedge_state.json` for restart-safe behavior.
 - Optional Telegram alerts can be enabled in `config.yaml`.
+- Bot now retries transient API/network errors and keeps running.
+- `status_push_seconds` controls periodic status updates to Telegram.
 - Add API keys in `config.yaml` (do not commit).

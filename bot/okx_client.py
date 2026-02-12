@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -53,16 +54,32 @@ class OKXClient:
         path_with_query = path + query
         url = self.base_url + path_with_query
         body_str = "" if json_body is None else json.dumps(json_body, separators=(",", ":"))
-        ts = self._timestamp()
-        headers = self._headers(ts, method, path_with_query, body_str)
 
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.request(method, url, content=body_str if body_str else None, headers=headers)
+        retries = 3
+        backoff = 1.2
+        last_err: Exception | None = None
 
-        data = resp.json()
-        if resp.status_code >= 400 or data.get("code") not in ("0", 0, None):
-            raise RuntimeError(f"OKX error: status={resp.status_code} body={data}")
-        return data
+        for i in range(retries):
+            try:
+                ts = self._timestamp()
+                headers = self._headers(ts, method, path_with_query, body_str)
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.request(method, url, content=body_str if body_str else None, headers=headers)
+                data = resp.json()
+                if resp.status_code >= 500:
+                    raise RuntimeError(f"OKX transient server error: status={resp.status_code} body={data}")
+                if data.get("code") in ("50001", "50004", "50011"):
+                    raise RuntimeError(f"OKX transient business error: body={data}")
+                if resp.status_code >= 400 or data.get("code") not in ("0", 0, None):
+                    raise RuntimeError(f"OKX error: status={resp.status_code} body={data}")
+                return data
+            except (httpx.HTTPError, RuntimeError) as e:
+                last_err = e
+                if i == retries - 1:
+                    break
+                await asyncio.sleep(backoff * (i + 1))
+
+        raise RuntimeError(str(last_err) if last_err else "OKX request failed")
 
     # ---- Convenience wrappers ----
 
@@ -72,13 +89,27 @@ class OKXClient:
             query = "?" + urlencode({k: v for k, v in params.items() if v is not None})
         url = self.base_url + path + query
 
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.request(method, url)
+        retries = 3
+        backoff = 1.0
+        last_err: Exception | None = None
 
-        data = resp.json()
-        if resp.status_code >= 400 or data.get("code") not in ("0", 0, None):
-            raise RuntimeError(f"OKX public error: status={resp.status_code} body={data}")
-        return data
+        for i in range(retries):
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.request(method, url)
+                data = resp.json()
+                if resp.status_code >= 500:
+                    raise RuntimeError(f"OKX public transient server error: status={resp.status_code} body={data}")
+                if resp.status_code >= 400 or data.get("code") not in ("0", 0, None):
+                    raise RuntimeError(f"OKX public error: status={resp.status_code} body={data}")
+                return data
+            except (httpx.HTTPError, RuntimeError) as e:
+                last_err = e
+                if i == retries - 1:
+                    break
+                await asyncio.sleep(backoff * (i + 1))
+
+        raise RuntimeError(str(last_err) if last_err else "OKX public request failed")
 
     async def account_config(self) -> dict[str, Any]:
         return await self.request("GET", "/api/v5/account/config")
