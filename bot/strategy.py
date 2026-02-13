@@ -68,13 +68,30 @@ class HedgeCycleStrategy:
             self._state = {
                 "today": self._today(),
                 "today_realized_usdt": 0.0,
+                "lifetime_realized_usdt": 0.0,
+                "closed_legs": 0,
                 "halted_today": False,
                 "cycle_id": 0,
                 "last_action": "",
                 "last_action_ts": 0.0,
                 "missing_side": "",
             }
-            self._save_state()
+
+        # Backward-compatible defaults for old state files.
+        self._state.setdefault("today", self._today())
+        self._state.setdefault("today_realized_usdt", 0.0)
+        self._state.setdefault("lifetime_realized_usdt", 0.0)
+        self._state.setdefault("closed_legs", 0)
+
+        # Migration heuristic: if old state had only today_realized, seed lifetime with it once.
+        if float(self._state.get("lifetime_realized_usdt", 0.0)) == 0.0 and float(self._state.get("today_realized_usdt", 0.0)) != 0.0:
+            self._state["lifetime_realized_usdt"] = float(self._state.get("today_realized_usdt", 0.0))
+        self._state.setdefault("halted_today", False)
+        self._state.setdefault("cycle_id", 0)
+        self._state.setdefault("last_action", "")
+        self._state.setdefault("last_action_ts", 0.0)
+        self._state.setdefault("missing_side", "")
+        self._save_state()
 
     def _save_state(self) -> None:
         p = self._state_path()
@@ -103,7 +120,8 @@ class HedgeCycleStrategy:
         self._save_state()
         await self._notify(
             f"Status | long(open={long_open}, upl={long_upl:.4f}) short(open={short_open}, upl={short_upl:.4f}) "
-            f"cycle={self._state.get('cycle_id',0)} today={self._state.get('today_realized_usdt',0.0):.4f}"
+            f"cycle={self._state.get('cycle_id',0)} today={self._state.get('today_realized_usdt',0.0):.4f} "
+            f"total={self._state.get('lifetime_realized_usdt',0.0):.4f}"
         )
 
     async def _decision_log_once(self, reason: str) -> None:
@@ -304,11 +322,14 @@ class HedgeCycleStrategy:
         await self.client.close_position(inst_id=inst, mgn_mode=td_mode, pos_side=side)
 
         self._state["today_realized_usdt"] = float(self._state.get("today_realized_usdt", 0.0)) + est_upl
+        self._state["lifetime_realized_usdt"] = float(self._state.get("lifetime_realized_usdt", 0.0)) + est_upl
+        self._state["closed_legs"] = int(self._state.get("closed_legs", 0)) + 1
         self._state["missing_side"] = side
         self._mark_action(f"close_{side}")
         self._save_state()
         await self._notify(
-            f"Closed {side} TP hit | est realized={est_upl:.4f} USDT | today={self._state['today_realized_usdt']:.4f} USDT"
+            f"Closed {side} TP hit | leg={est_upl:.4f} USDT | total={self._state['lifetime_realized_usdt']:.4f} USDT "
+            f"| today={self._state['today_realized_usdt']:.4f} USDT | closed_legs={self._state['closed_legs']}"
         )
 
     def _effective_tp_usdt(self) -> float:
