@@ -299,7 +299,7 @@ class HedgeCycleStrategy:
 
         return True, "ok"
 
-    async def _open_side(self, side: PosSide) -> None:
+    async def _open_side(self, side: PosSide, reason: str) -> None:
         inst = self._bot()["instrument_id"]
         td_mode = self._bot().get("td_mode", "isolated")
         side_for_order = "buy" if side == "long" else "sell"
@@ -314,9 +314,9 @@ class HedgeCycleStrategy:
             sz=sz,
         )
         self._mark_action(f"open_{side}")
-        await self._notify(f"Opened {side} | {inst} sz={sz}")
+        await self._notify(f"Opened {side} | {inst} sz={sz} | why: {reason}")
 
-    async def _close_side(self, side: PosSide, est_upl: float) -> None:
+    async def _close_side(self, side: PosSide, est_upl: float, reason: str) -> None:
         inst = self._bot()["instrument_id"]
         td_mode = self._bot().get("td_mode", "isolated")
         await self.client.close_position(inst_id=inst, mgn_mode=td_mode, pos_side=side)
@@ -329,7 +329,7 @@ class HedgeCycleStrategy:
         self._save_state()
         await self._notify(
             f"Closed {side} TP hit | leg={est_upl:.4f} USDT | total={self._state['lifetime_realized_usdt']:.4f} USDT "
-            f"| today={self._state['today_realized_usdt']:.4f} USDT | closed_legs={self._state['closed_legs']}"
+            f"| today={self._state['today_realized_usdt']:.4f} USDT | closed_legs={self._state['closed_legs']} | why: {reason}"
         )
 
     def _effective_tp_usdt(self) -> float:
@@ -391,12 +391,13 @@ class HedgeCycleStrategy:
                 console.print(f"[yellow]entry blocked:[/] {reason}")
                 await self._decision_log_once(f"entry blocked: {reason}")
                 return
-            await self._open_side("long")
-            await self._open_side("short")
+            base_reason = "entry allowed: spread/vol filters passed and no open positions"
+            await self._open_side("long", reason=base_reason)
+            await self._open_side("short", reason=base_reason)
             self._state["cycle_id"] = int(self._state.get("cycle_id", 0)) + 1
             self._state["missing_side"] = ""
             self._save_state()
-            await self._notify(f"Cycle #{self._state['cycle_id']} started (both sides open)")
+            await self._notify(f"Cycle #{self._state['cycle_id']} started (both sides open) | why: neutral hedge entry after filters passed")
             return
 
         # Keep hedged structure: if one side missing and recovery reached on opposite side, re-open missing side.
@@ -406,11 +407,13 @@ class HedgeCycleStrategy:
                 console.print(f"[yellow]re-entry blocked:[/] {reason}")
                 await self._decision_log_once(f"re-entry blocked: {reason}")
                 return
-            await self._open_side("long")
+            await self._open_side("long", reason=f"re-entry: short upl {short_upl:.4f} >= recovery {recovery:.4f}")
             self._state["missing_side"] = ""
             self._state["cycle_id"] = int(self._state.get("cycle_id", 0)) + 1
             self._save_state()
-            await self._notify(f"Re-opened long after recovery. Cycle #{self._state['cycle_id']}")
+            await self._notify(
+                f"Re-opened long after recovery. Cycle #{self._state['cycle_id']} | why: short recovery condition met"
+            )
             return
 
         if not short_open and long_open and long_upl >= recovery:
@@ -419,20 +422,22 @@ class HedgeCycleStrategy:
                 console.print(f"[yellow]re-entry blocked:[/] {reason}")
                 await self._decision_log_once(f"re-entry blocked: {reason}")
                 return
-            await self._open_side("short")
+            await self._open_side("short", reason=f"re-entry: long upl {long_upl:.4f} >= recovery {recovery:.4f}")
             self._state["missing_side"] = ""
             self._state["cycle_id"] = int(self._state.get("cycle_id", 0)) + 1
             self._save_state()
-            await self._notify(f"Re-opened short after recovery. Cycle #{self._state['cycle_id']}")
+            await self._notify(
+                f"Re-opened short after recovery. Cycle #{self._state['cycle_id']} | why: long recovery condition met"
+            )
             return
 
         # Take profit on whichever open side reaches threshold.
         if long_open and long_upl >= tp:
-            await self._close_side("long", est_upl=long_upl)
+            await self._close_side("long", est_upl=long_upl, reason=f"TP reached: long upl {long_upl:.4f} >= {tp:.4f}")
             return
 
         if short_open and short_upl >= tp:
-            await self._close_side("short", est_upl=short_upl)
+            await self._close_side("short", est_upl=short_upl, reason=f"TP reached: short upl {short_upl:.4f} >= {tp:.4f}")
             return
 
         await self._decision_log_once("waiting for recovery/TP")
