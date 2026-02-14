@@ -108,7 +108,11 @@ class HedgeCycleStrategy:
             except Exception as e:
                 console.print(f"[yellow]telegram alert failed:[/] {e}")
 
-    async def _maybe_status_push(self, long_open: bool, short_open: bool, long_upl: float, short_upl: float, tp: float, recovery: float) -> None:
+    def _equity_total_pnl(self, long_upl: float, short_upl: float) -> float:
+        realized = float(self._state.get("lifetime_realized_usdt", 0.0))
+        return realized + long_upl + short_upl
+
+    async def _maybe_status_push(self, long_open: bool, short_open: bool, long_upl: float, short_upl: float, tp: float, recovery: float, net_tp: float) -> None:
         interval = int(self._bot().get("status_push_seconds", 600))
         if interval <= 0:
             return
@@ -119,10 +123,12 @@ class HedgeCycleStrategy:
         self._state["last_status_push_ts"] = now
         self._save_state()
         reason = str(self._state.get("last_decision_reason", "n/a"))
+        pair_upl = long_upl + short_upl
+        equity_total = self._equity_total_pnl(long_upl, short_upl)
         await self._notify(
             f"Status | decision={reason} | long(open={long_open}, upl={long_upl:.4f}) short(open={short_open}, upl={short_upl:.4f}) "
-            f"tp={tp:.4f} recovery={recovery:.4f} cycle={self._state.get('cycle_id',0)} "
-            f"today={self._state.get('today_realized_usdt',0.0):.4f} total={self._state.get('lifetime_realized_usdt',0.0):.4f}"
+            f"pair={pair_upl:.4f} tp={tp:.4f} net_tp={net_tp:.4f} recovery={recovery:.4f} cycle={self._state.get('cycle_id',0)} "
+            f"today_realized={self._state.get('today_realized_usdt',0.0):.4f} realized_total={self._state.get('lifetime_realized_usdt',0.0):.4f} equity_total={equity_total:.4f}"
         )
 
     async def _decision_log_once(self, reason: str) -> None:
@@ -329,9 +335,15 @@ class HedgeCycleStrategy:
         self._mark_action(f"close_{side}")
         self._save_state()
         await self._notify(
-            f"Closed {side} TP hit | leg={est_upl:.4f} USDT | total={self._state['lifetime_realized_usdt']:.4f} USDT "
-            f"| today={self._state['today_realized_usdt']:.4f} USDT | closed_legs={self._state['closed_legs']} | why: {reason}"
+            f"Closed {side} | leg={est_upl:.4f} USDT | realized_total={self._state['lifetime_realized_usdt']:.4f} USDT "
+            f"| today_realized={self._state['today_realized_usdt']:.4f} USDT | closed_legs={self._state['closed_legs']} | why: {reason}"
         )
+
+    async def _close_both_sides(self, long_upl: float, short_upl: float, reason: str) -> None:
+        if long_upl != 0.0:
+            await self._close_side("long", est_upl=long_upl, reason=reason)
+        if short_upl != 0.0:
+            await self._close_side("short", est_upl=short_upl, reason=reason)
 
     def _effective_tp_usdt(self) -> float:
         bot = self._bot()
@@ -376,11 +388,14 @@ class HedgeCycleStrategy:
 
         tp = self._effective_tp_usdt()
         recovery = float(self._bot().get("recovery_usdt", 0.10))
+        net_tp = float(self._bot().get("net_take_profit_usdt", 1.20))
+        max_pair_loss = float(self._bot().get("max_pair_loss_usdt", 35.0))
+        pair_upl = long_upl + short_upl
 
         console.print(
-            f"state long(open={long_open}, upl={long_upl:.4f}) short(open={short_open}, upl={short_upl:.4f}) | tp={tp:.4f} recovery={recovery:.4f}"
+            f"state long(open={long_open}, upl={long_upl:.4f}) short(open={short_open}, upl={short_upl:.4f}) | pair={pair_upl:.4f} tp={tp:.4f} net_tp={net_tp:.4f} recovery={recovery:.4f}"
         )
-        await self._maybe_status_push(long_open, short_open, long_upl, short_upl, tp, recovery)
+        await self._maybe_status_push(long_open, short_open, long_upl, short_upl, tp, recovery, net_tp)
 
         if not self._can_act_now():
             return
@@ -432,13 +447,30 @@ class HedgeCycleStrategy:
             )
             return
 
-        # Take profit on whichever open side reaches threshold.
-        if long_open and long_upl >= tp:
-            await self._close_side("long", est_upl=long_upl, reason=f"TP reached: long upl {long_upl:.4f} >= {tp:.4f}")
+        # Pair-level risk protection.
+        if long_open and short_open and pair_upl <= -abs(max_pair_loss):
+            await self._close_both_sides(
+                long_upl=long_upl,
+                short_upl=short_upl,
+                reason=f"hard stop: pair upl {pair_upl:.4f} <= -{abs(max_pair_loss):.4f}",
+            )
             return
 
-        if short_open and short_upl >= tp:
-            await self._close_side("short", est_upl=short_upl, reason=f"TP reached: short upl {short_upl:.4f} >= {tp:.4f}")
-            return
+        # Pair-aware take profit: close only if winner leg AND total pair PnL are both good.
+        if long_open and short_open:
+            if long_upl >= tp and pair_upl >= net_tp:
+                await self._close_side(
+                    "long",
+                    est_upl=long_upl,
+                    reason=f"pair-aware TP: long upl {long_upl:.4f} >= {tp:.4f} and pair upl {pair_upl:.4f} >= {net_tp:.4f}",
+                )
+                return
+            if short_upl >= tp and pair_upl >= net_tp:
+                await self._close_side(
+                    "short",
+                    est_upl=short_upl,
+                    reason=f"pair-aware TP: short upl {short_upl:.4f} >= {tp:.4f} and pair upl {pair_upl:.4f} >= {net_tp:.4f}",
+                )
+                return
 
-        await self._decision_log_once("waiting for recovery/TP")
+        await self._decision_log_once("waiting: pair criteria not met")

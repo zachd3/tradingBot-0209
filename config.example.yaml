@@ -19,8 +19,10 @@ bot:
   min_edge_usdt: 0.15                 # minimal edge before taking profit
 
   # Cycle logic
-  take_profit_usdt: 0.60              # strategy uses max(configured, fee-based floor)
+  take_profit_usdt: 0.60              # leg TP (fee-aware floor still applied)
+  net_take_profit_usdt: 1.20          # require pair upl >= this before closing winner
   recovery_usdt: 0.10                 # re-open missing side when remaining side uPnL >= this
+  max_pair_loss_usdt: 35              # hard stop on combined pair upl
 
   # Market quality filters (for opens/re-opens)
   max_spread_bps: 10                  # block entries if spread wider than this
