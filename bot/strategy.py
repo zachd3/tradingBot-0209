@@ -108,7 +108,7 @@ class HedgeCycleStrategy:
             except Exception as e:
                 console.print(f"[yellow]telegram alert failed:[/] {e}")
 
-    async def _maybe_status_push(self, long_open: bool, short_open: bool, long_upl: float, short_upl: float) -> None:
+    async def _maybe_status_push(self, long_open: bool, short_open: bool, long_upl: float, short_upl: float, tp: float, recovery: float) -> None:
         interval = int(self._bot().get("status_push_seconds", 600))
         if interval <= 0:
             return
@@ -118,10 +118,11 @@ class HedgeCycleStrategy:
             return
         self._state["last_status_push_ts"] = now
         self._save_state()
+        reason = str(self._state.get("last_decision_reason", "n/a"))
         await self._notify(
-            f"Status | long(open={long_open}, upl={long_upl:.4f}) short(open={short_open}, upl={short_upl:.4f}) "
-            f"cycle={self._state.get('cycle_id',0)} today={self._state.get('today_realized_usdt',0.0):.4f} "
-            f"total={self._state.get('lifetime_realized_usdt',0.0):.4f}"
+            f"Status | decision={reason} | long(open={long_open}, upl={long_upl:.4f}) short(open={short_open}, upl={short_upl:.4f}) "
+            f"tp={tp:.4f} recovery={recovery:.4f} cycle={self._state.get('cycle_id',0)} "
+            f"today={self._state.get('today_realized_usdt',0.0):.4f} total={self._state.get('lifetime_realized_usdt',0.0):.4f}"
         )
 
     async def _decision_log_once(self, reason: str) -> None:
@@ -379,7 +380,7 @@ class HedgeCycleStrategy:
         console.print(
             f"state long(open={long_open}, upl={long_upl:.4f}) short(open={short_open}, upl={short_upl:.4f}) | tp={tp:.4f} recovery={recovery:.4f}"
         )
-        await self._maybe_status_push(long_open, short_open, long_upl, short_upl)
+        await self._maybe_status_push(long_open, short_open, long_upl, short_upl, tp, recovery)
 
         if not self._can_act_now():
             return
