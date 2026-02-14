@@ -78,6 +78,7 @@ class HedgeCycleStrategy:
             }
 
         # Backward-compatible defaults for old state files.
+        self._state.setdefault("strategy_start_ms", int(time.time() * 1000))
         self._state.setdefault("today", self._today())
         self._state.setdefault("today_realized_usdt", 0.0)
         self._state.setdefault("lifetime_realized_usdt", 0.0)
@@ -138,6 +139,31 @@ class HedgeCycleStrategy:
         self._state["last_decision_reason"] = reason
         self._save_state()
         await self._notify(f"Decision: hold ({reason})")
+
+    async def _sync_realized_from_okx(self) -> None:
+        """Use OKX closed-position history to keep realized PnL accurate (including losses)."""
+        inst = self._bot()["instrument_id"]
+        start_ms = int(self._state.get("strategy_start_ms", 0))
+        hist = await self.client.positions_history(inst_type="SWAP", inst_id=inst, limit=100)
+        rows = hist.get("data", [])
+
+        lifetime = 0.0
+        today = 0.0
+        today_str = self._today()
+        for r in rows:
+            u_time = int(_to_float(r.get("uTime"), 0.0))
+            if u_time and u_time < start_ms:
+                continue
+            realized = _to_float(r.get("realizedPnl"), 0.0)
+            lifetime += realized
+            if u_time:
+                d = datetime.fromtimestamp(u_time / 1000).strftime("%Y-%m-%d")
+                if d == today_str:
+                    today += realized
+
+        self._state["lifetime_realized_usdt"] = lifetime
+        self._state["today_realized_usdt"] = today
+        self._save_state()
 
     def _roll_day_if_needed(self) -> None:
         today = self._today()
@@ -328,14 +354,13 @@ class HedgeCycleStrategy:
         td_mode = self._bot().get("td_mode", "isolated")
         await self.client.close_position(inst_id=inst, mgn_mode=td_mode, pos_side=side)
 
-        self._state["today_realized_usdt"] = float(self._state.get("today_realized_usdt", 0.0)) + est_upl
-        self._state["lifetime_realized_usdt"] = float(self._state.get("lifetime_realized_usdt", 0.0)) + est_upl
         self._state["closed_legs"] = int(self._state.get("closed_legs", 0)) + 1
         self._state["missing_side"] = side
         self._mark_action(f"close_{side}")
+        await self._sync_realized_from_okx()
         self._save_state()
         await self._notify(
-            f"Closed {side} | leg={est_upl:.4f} USDT | realized_total={self._state['lifetime_realized_usdt']:.4f} USDT "
+            f"Closed {side} | leg_est={est_upl:.4f} USDT | realized_total={self._state['lifetime_realized_usdt']:.4f} USDT "
             f"| today_realized={self._state['today_realized_usdt']:.4f} USDT | closed_legs={self._state['closed_legs']} | why: {reason}"
         )
 
@@ -379,6 +404,7 @@ class HedgeCycleStrategy:
 
         await self._preflight_check()
         await self._ensure_leverage()
+        await self._sync_realized_from_okx()
 
         pos = await self._fetch_positions()
         long_open = bool(pos["long"]["open"])

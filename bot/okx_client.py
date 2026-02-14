@@ -127,6 +127,13 @@ class OKXClient:
     async def positions(self, inst_id: str) -> dict[str, Any]:
         return await self.request("GET", "/api/v5/account/positions", params={"instId": inst_id})
 
+    async def positions_history(self, inst_type: str = "SWAP", inst_id: Optional[str] = None, limit: int = 100) -> dict[str, Any]:
+        return await self.request(
+            "GET",
+            "/api/v5/account/positions-history",
+            params={"instType": inst_type, "instId": inst_id, "limit": limit},
+        )
+
     async def instruments(self, inst_type: str, inst_id: Optional[str] = None) -> dict[str, Any]:
         return await self.public_request("GET", "/api/v5/public/instruments", params={"instType": inst_type, "instId": inst_id})
 
