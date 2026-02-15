@@ -28,13 +28,15 @@ bot:
   max_spread_bps: 10                  # block entries if spread wider than this
   vol_bar: "1m"
   vol_lookback: 30
-  max_vol_bps: 35                     # stdev(log-returns) in bps
+  max_vol_bps: 18                     # stdev(log-returns) in bps
+  trend_score_threshold: 1.2          # trend score gate for single-side mode
+  trend_stop_loss_usdt: 9             # stop for single-side trend position
 
   # Runtime behavior
-  poll_seconds: 10
+  poll_seconds: 60
   error_retry_seconds: 8
-  min_action_interval_seconds: 3
-  status_push_seconds: 600            # periodic Telegram heartbeat status
+  min_action_interval_seconds: 0
+  status_push_seconds: 900            # notify every 15 minutes
   state_file: "state/hedge_state.json"
 
 risk:

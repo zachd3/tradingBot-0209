@@ -332,6 +332,26 @@ class HedgeCycleStrategy:
 
         return True, "ok"
 
+    async def _market_regime(self) -> tuple[str, str, str]:
+        """Return (regime, bias, reason): regime in {trend, range}, bias in {long, short, neutral}."""
+        inst = self._bot()["instrument_id"]
+        c = await self.client.candles(inst, bar="1m", limit=80)
+        rows = c.get("data", [])
+        closes = [_to_float(r[4], 0.0) for r in rows if len(r) >= 5]
+        closes = list(reversed([x for x in closes if x > 0]))
+        if len(closes) < 30:
+            return "range", "neutral", "insufficient candles"
+
+        rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes)) if closes[i - 1] > 0]
+        vol = pstdev(rets[-30:]) * 10000 if len(rets) >= 30 else 0.0
+        mom_20 = (closes[-1] / closes[-21] - 1.0) * 10000 if len(closes) >= 21 else 0.0
+        score = abs(mom_20) / max(vol, 1.0)
+        th = float(self._bot().get("trend_score_threshold", 1.2))
+
+        if score >= th:
+            bias = "long" if mom_20 > 0 else "short"
+            return "trend", bias, f"trend score {score:.2f}>= {th:.2f}, mom20={mom_20:.1f}bps, vol30={vol:.1f}bps"
+        return "range", "neutral", f"range score {score:.2f}< {th:.2f}, mom20={mom_20:.1f}bps, vol30={vol:.1f}bps"
     async def _open_side(self, side: PosSide, reason: str) -> None:
         inst = self._bot()["instrument_id"]
         td_mode = self._bot().get("td_mode", "isolated")
@@ -426,51 +446,75 @@ class HedgeCycleStrategy:
         if not self._can_act_now():
             return
 
-        # First run / restart recovery
+        regime, bias, regime_reason = await self._market_regime()
+
+        # Entry logic by regime.
         if not long_open and not short_open:
             ok, reason = await self._market_filter_ok()
             if not ok:
                 console.print(f"[yellow]entry blocked:[/] {reason}")
                 await self._decision_log_once(f"entry blocked: {reason}")
                 return
-            base_reason = "entry allowed: spread/vol filters passed and no open positions"
+
+            if regime == "trend" and bias in ("long", "short"):
+                await self._open_side(bias, reason=f"trend entry: {regime_reason}")
+                self._state["cycle_id"] = int(self._state.get("cycle_id", 0)) + 1
+                self._state["missing_side"] = ""
+                self._save_state()
+                await self._notify(f"Cycle #{self._state['cycle_id']} started (single-side trend) | why: {regime_reason}")
+                return
+
+            base_reason = f"range hedge entry: {regime_reason}"
             await self._open_side("long", reason=base_reason)
             await self._open_side("short", reason=base_reason)
             self._state["cycle_id"] = int(self._state.get("cycle_id", 0)) + 1
             self._state["missing_side"] = ""
             self._save_state()
-            await self._notify(f"Cycle #{self._state['cycle_id']} started (both sides open) | why: neutral hedge entry after filters passed")
+            await self._notify(f"Cycle #{self._state['cycle_id']} started (both sides open) | why: {regime_reason}")
             return
 
-        # Keep hedged structure: if one side missing and recovery reached on opposite side, re-open missing side.
-        if not long_open and short_open and short_upl >= recovery:
+        # Single-side trend management.
+        trend_stop = float(self._bot().get("trend_stop_loss_usdt", 9.0))
+        if long_open and not short_open:
+            if long_upl <= -abs(trend_stop):
+                await self._close_side("long", est_upl=long_upl, reason=f"trend stop: long upl {long_upl:.4f} <= -{abs(trend_stop):.4f}")
+                return
+            if long_upl >= tp:
+                await self._close_side("long", est_upl=long_upl, reason=f"trend TP: long upl {long_upl:.4f} >= {tp:.4f}")
+                return
+        if short_open and not long_open:
+            if short_upl <= -abs(trend_stop):
+                await self._close_side("short", est_upl=short_upl, reason=f"trend stop: short upl {short_upl:.4f} <= -{abs(trend_stop):.4f}")
+                return
+            if short_upl >= tp:
+                await self._close_side("short", est_upl=short_upl, reason=f"trend TP: short upl {short_upl:.4f} >= {tp:.4f}")
+                return
+
+        # Range-mode re-hedge: only when regime is range.
+        if regime == "range" and not long_open and short_open and short_upl >= recovery:
             ok, reason = await self._market_filter_ok()
             if not ok:
                 console.print(f"[yellow]re-entry blocked:[/] {reason}")
                 await self._decision_log_once(f"re-entry blocked: {reason}")
                 return
-            await self._open_side("long", reason=f"re-entry: short upl {short_upl:.4f} >= recovery {recovery:.4f}")
+            await self._open_side("long", reason=f"range re-entry: short upl {short_upl:.4f} >= recovery {recovery:.4f}")
             self._state["missing_side"] = ""
             self._state["cycle_id"] = int(self._state.get("cycle_id", 0)) + 1
             self._save_state()
-            await self._notify(
-                f"Re-opened long after recovery. Cycle #{self._state['cycle_id']} | why: short recovery condition met"
-            )
+            await self._notify(f"Re-opened long after recovery. Cycle #{self._state['cycle_id']} | why: {regime_reason}")
             return
 
-        if not short_open and long_open and long_upl >= recovery:
+        if regime == "range" and not short_open and long_open and long_upl >= recovery:
             ok, reason = await self._market_filter_ok()
             if not ok:
                 console.print(f"[yellow]re-entry blocked:[/] {reason}")
                 await self._decision_log_once(f"re-entry blocked: {reason}")
                 return
-            await self._open_side("short", reason=f"re-entry: long upl {long_upl:.4f} >= recovery {recovery:.4f}")
+            await self._open_side("short", reason=f"range re-entry: long upl {long_upl:.4f} >= recovery {recovery:.4f}")
             self._state["missing_side"] = ""
             self._state["cycle_id"] = int(self._state.get("cycle_id", 0)) + 1
             self._save_state()
-            await self._notify(
-                f"Re-opened short after recovery. Cycle #{self._state['cycle_id']} | why: long recovery condition met"
-            )
+            await self._notify(f"Re-opened short after recovery. Cycle #{self._state['cycle_id']} | why: {regime_reason}")
             return
 
         # Pair-level risk protection.
@@ -482,7 +526,7 @@ class HedgeCycleStrategy:
             )
             return
 
-        # Pair-aware take profit: close only if winner leg AND total pair PnL are both good.
+        # Pair-aware take profit for hedged structure.
         if long_open and short_open:
             if long_upl >= tp and pair_upl >= net_tp:
                 await self._close_side(
@@ -499,4 +543,4 @@ class HedgeCycleStrategy:
                 )
                 return
 
-        await self._decision_log_once("waiting: pair criteria not met")
+        await self._decision_log_once(f"hold: regime={regime}, bias={bias}, reason={regime_reason}")
